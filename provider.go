@@ -16,6 +16,11 @@ func NewProvider() provider.Provider {
 
 type bitbucketTokenProvider struct{}
 
+type bitbucketTokenProviderModel struct {
+	AuthHeader types.String `tfsdk:"auth_header"`
+	ServerURL  types.String `tfsdk:"server_url"`
+}
+
 func (p *bitbucketTokenProvider) Metadata(_ context.Context, _ provider.MetadataRequest, resp *provider.MetadataResponse) {
 	resp.TypeName = "bitbucket"
 }
@@ -26,30 +31,50 @@ func (p *bitbucketTokenProvider) Schema(_ context.Context, _ provider.SchemaRequ
 		Attributes: map[string]schema.Attribute{
 			"auth_header": schema.StringAttribute{
 				Description: "Base64 encoded Basic Auth header or personal access token.",
-				Optional:    true,
-				Sensitive:   true, // <--- klíčové
+				Required:    true,
+				Sensitive:   true,
+			},
+			"server_url": schema.StringAttribute{
+				Description: "Base URL of the Bitbucket server (e.g. https://stash.example.com). Must not end with a slash.",
+				Required:    true,
 			},
 		},
 	}
 }
 
 func (p *bitbucketTokenProvider) Configure(ctx context.Context, req provider.ConfigureRequest, resp *provider.ConfigureResponse) {
-	var config struct {
-		AuthHeader types.String `tfsdk:"auth_header"`
-	}
-
+	var config bitbucketTokenProviderModel
 	resp.Diagnostics.Append(req.Config.Get(ctx, &config)...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
 
-	if config.AuthHeader.IsNull() {
-		resp.Diagnostics.AddWarning("Missing credentials", "No auth_header provided — provider will not authenticate requests.")
+	if config.ServerURL.IsNull() || config.ServerURL.ValueString() == "" {
+		resp.Diagnostics.AddError(
+			"Missing server URL",
+			"The provider requires a 'server_url' to be specified.",
+		)
 		return
 	}
 
-	resp.DataSourceData = config.AuthHeader.ValueString()
-	resp.ResourceData = config.AuthHeader.ValueString()
+	if config.AuthHeader.IsNull() || config.AuthHeader.ValueString() == "" {
+		resp.Diagnostics.AddError(
+			"Missing authentication header",
+			"The provider requires an 'auth_header' to be specified.",
+		)
+		return
+	}
+
+	serverURL := config.ServerURL.ValueString()
+	authHeader := config.AuthHeader.ValueString()
+
+	providerData := ProviderData{
+		AuthHeader: authHeader,
+		ServerURL:  serverURL,
+	}
+
+	resp.DataSourceData = providerData
+	resp.ResourceData = providerData
 }
 
 func (p *bitbucketTokenProvider) DataSources(_ context.Context) []func() datasource.DataSource {

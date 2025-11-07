@@ -14,8 +14,14 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/types"
 )
 
+type ProviderData struct {
+	AuthHeader string
+	ServerURL  string
+}
+
 type BitbucketTokenResource struct {
 	authHeader string
+	serverURL  string
 }
 
 func NewBitbucketTokenResource() resource.Resource {
@@ -42,16 +48,21 @@ func (r *BitbucketTokenResource) Schema(_ context.Context, req resource.SchemaRe
 				Computed: true,
 			},
 			"token_name": schema.StringAttribute{
-				Required: true,
+				Description: "Name prefix for the Bitbucket access token.",
+				Required:    true,
 			},
 			"project_name": schema.StringAttribute{
-				Required: true,
+				Description: "Name of the Bitbucket project.",
+				Required:    true,
 			},
 			"repository_name": schema.StringAttribute{
-				Required: true,
+				Description: "Name of the Bitbucket repository.",
+				Required:    true,
 			},
 			"token": schema.StringAttribute{
-				Computed: true,
+				Description: "Generated Bitbucket access token (sensitive).",
+				Computed:    true,
+				Sensitive:   true,
 			},
 		},
 	}
@@ -59,22 +70,36 @@ func (r *BitbucketTokenResource) Schema(_ context.Context, req resource.SchemaRe
 
 func (r *BitbucketTokenResource) Configure(ctx context.Context, req resource.ConfigureRequest, resp *resource.ConfigureResponse) {
 	if req.ProviderData == nil {
-		return
-	}
-
-	auth, ok := req.ProviderData.(string)
-	if !ok {
 		resp.Diagnostics.AddError(
-			"Unexpected provider data type",
-			fmt.Sprintf("Expected string, got: %T", req.ProviderData),
+			"Missing provider configuration",
+			"The Bitbucket provider was not configured before using this resource.",
 		)
 		return
 	}
-	r.authHeader = auth
+
+	providerData, ok := req.ProviderData.(ProviderData)
+	if !ok {
+		resp.Diagnostics.AddError(
+			"Unexpected Provider Data Type",
+			fmt.Sprintf("Expected ProviderData, got: %T", req.ProviderData),
+		)
+		return
+	}
+
+	if providerData.ServerURL == "" {
+		resp.Diagnostics.AddError(
+			"Invalid provider configuration",
+			"The 'server_url' in provider configuration cannot be empty.",
+		)
+		return
+	}
+
+	r.authHeader = providerData.AuthHeader
+	r.serverURL = providerData.ServerURL
 }
 
-func (r *BitbucketTokenResource) getExistingToken(auth, project, repo, name string) (string, error) {
-	apiURL := fmt.Sprintf("https://stash.ysoft.local/rest/access-tokens/latest/projects/%s/repos/%s?limit=10000", project, repo)
+func (r *BitbucketTokenResource) getExistingToken(auth, baseURL, project, repo, name string) (string, error) {
+	apiURL := fmt.Sprintf("%s/rest/access-tokens/latest/projects/%s/repos/%s?limit=10000", baseURL, project, repo)
 	client := &http.Client{Timeout: 15 * time.Second}
 
 	reqGet, _ := http.NewRequest("GET", apiURL, nil)
@@ -109,14 +134,14 @@ func (r *BitbucketTokenResource) getExistingToken(auth, project, repo, name stri
 	}
 
 	if latestToken == "" {
-		return "", nil // no active token
+		return "", nil
 	}
 	return latestToken, nil
 }
 
-func (r *BitbucketTokenResource) createToken(auth, project, repo, name string) (string, error) {
+func (r *BitbucketTokenResource) createToken(auth, baseURL, project, repo, name string) (string, error) {
 	now := time.Now().UnixMilli()
-	putURL := fmt.Sprintf("https://stash.ysoft.local/rest/access-tokens/latest/projects/%s/repos/%s", project, repo)
+	putURL := fmt.Sprintf("%s/rest/access-tokens/latest/projects/%s/repos/%s", baseURL, project, repo)
 	payload := map[string]interface{}{
 		"expiryDays":  90,
 		"name":        fmt.Sprintf("%s-%d", name, now),
@@ -141,12 +166,13 @@ func (r *BitbucketTokenResource) createToken(auth, project, repo, name string) (
 
 	tok, _ := putJSON["token"].(string)
 	if tok == "" {
-		return "", fmt.Errorf("failed to obtain token from API response")
+		return "", fmt.Errorf("failed to obtain token from API response: %s", string(bodyPut))
 	}
 
 	return tok, nil
 }
 
+// Create resource
 func (r *BitbucketTokenResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
 	var data BitbucketTokenResourceModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &data)...)
@@ -154,31 +180,30 @@ func (r *BitbucketTokenResource) Create(ctx context.Context, req resource.Create
 		return
 	}
 
-	// Check if a token already exists
 	existing, err := r.getExistingToken(
 		r.authHeader,
+		r.serverURL,
 		data.ProjectName.ValueString(),
 		data.RepositoryName.ValueString(),
 		data.TokenName.ValueString(),
 	)
 	if err != nil {
-		resp.Diagnostics.AddError("Error checking token", err.Error())
+		resp.Diagnostics.AddError("Error checking existing token", err.Error())
 		return
 	}
 
 	if existing != "" {
-		// token already exists
 		data.Token = types.StringValue(existing)
 	} else {
-		// create new token
 		token, err := r.createToken(
 			r.authHeader,
+			r.serverURL,
 			data.ProjectName.ValueString(),
 			data.RepositoryName.ValueString(),
 			data.TokenName.ValueString(),
 		)
 		if err != nil {
-			resp.Diagnostics.AddError("Error creating token", err.Error())
+			resp.Diagnostics.AddError("Error creating new token", err.Error())
 			return
 		}
 		data.Token = types.StringValue(token)
@@ -202,6 +227,7 @@ func (r *BitbucketTokenResource) Read(ctx context.Context, req resource.ReadRequ
 
 	existing, err := r.getExistingToken(
 		r.authHeader,
+		r.serverURL,
 		data.ProjectName.ValueString(),
 		data.RepositoryName.ValueString(),
 		data.TokenName.ValueString(),
@@ -212,12 +238,10 @@ func (r *BitbucketTokenResource) Read(ctx context.Context, req resource.ReadRequ
 	}
 
 	if existing == "" {
-		// Token no longer exists → mark resource gone
 		resp.State.RemoveResource(ctx)
 		return
 	}
 
-	// keep same state
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
 }
 
@@ -228,9 +252,9 @@ func (r *BitbucketTokenResource) Update(ctx context.Context, req resource.Update
 		return
 	}
 
-	// Check if a valid token already exists
 	existing, err := r.getExistingToken(
 		r.authHeader,
+		r.serverURL,
 		data.ProjectName.ValueString(),
 		data.RepositoryName.ValueString(),
 		data.TokenName.ValueString(),
@@ -241,12 +265,11 @@ func (r *BitbucketTokenResource) Update(ctx context.Context, req resource.Update
 	}
 
 	if existing != "" {
-		// Token already valid, no need to recreate
 		data.Token = types.StringValue(existing)
 	} else {
-		// No valid token found → create a new one
 		token, err := r.createToken(
 			r.authHeader,
+			r.serverURL,
 			data.ProjectName.ValueString(),
 			data.RepositoryName.ValueString(),
 			data.TokenName.ValueString(),
@@ -272,20 +295,15 @@ func (r *BitbucketTokenResource) Delete(ctx context.Context, req resource.Delete
 	project := data.ProjectName.ValueString()
 	repo := data.RepositoryName.ValueString()
 	name := data.TokenName.ValueString()
+	baseURL := r.serverURL
 
 	client := &http.Client{Timeout: 15 * time.Second}
 
-	// First find the token ID if needed
-	tokenID, err := r.getExistingToken(
-		auth,
-		project,
-		repo,
-		name,
-	)
+	tokenID, err := r.getExistingToken(auth, baseURL, project, repo, name)
 	if err != nil {
 		resp.Diagnostics.AddWarning("Failed to verify token before deletion", err.Error())
 	} else if tokenID != "" {
-		apiURL := fmt.Sprintf("https://stash.ysoft.local/rest/access-tokens/latest/projects/%s/repos/%s/%s", project, repo, tokenID)
+		apiURL := fmt.Sprintf("%s/rest/access-tokens/latest/projects/%s/repos/%s/%s", baseURL, project, repo, tokenID)
 		reqDel, _ := http.NewRequest("DELETE", apiURL, nil)
 		reqDel.Header.Add("Authorization", "Basic "+auth)
 
@@ -304,6 +322,5 @@ func (r *BitbucketTokenResource) Delete(ctx context.Context, req resource.Delete
 		}
 	}
 
-	// Terraform will remove resource from state regardless
 	resp.State.RemoveResource(ctx)
 }
