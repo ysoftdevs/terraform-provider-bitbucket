@@ -8,6 +8,6 @@ import (
 
 func main() {
 	providerserver.Serve(context.Background(), NewProvider, providerserver.ServeOpts{
-		Address: "local/bitbucket/token",
+		Address: "ysoftdevs/bitbucket",
 	})
 }
