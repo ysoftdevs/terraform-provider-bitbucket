@@ -77,7 +77,7 @@ func (r *BitbucketTokenResource) Configure(ctx context.Context, req resource.Con
 		return
 	}
 
-	providerData, ok := req.ProviderData.(ProviderData)
+	providerData, ok := req.ProviderData.(*ProviderData)
 	if !ok {
 		resp.Diagnostics.AddError(
 			"Unexpected Provider Data Type",
