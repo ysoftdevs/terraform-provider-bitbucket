@@ -70,14 +70,10 @@ func (r *BitbucketTokenResource) Schema(_ context.Context, req resource.SchemaRe
 
 func (r *BitbucketTokenResource) Configure(ctx context.Context, req resource.ConfigureRequest, resp *resource.ConfigureResponse) {
 	if req.ProviderData == nil {
-		resp.Diagnostics.AddError(
-			"Missing provider configuration",
-			"The Bitbucket provider was not configured before using this resource.",
-		)
 		return
 	}
 
-	providerData, ok := req.ProviderData.(ProviderData)
+	providerData, ok := req.ProviderData.(*ProviderData)
 	if !ok {
 		resp.Diagnostics.AddError(
 			"Unexpected Provider Data Type",

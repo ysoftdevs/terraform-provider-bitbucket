@@ -65,12 +65,9 @@ func (p *bitbucketTokenProvider) Configure(ctx context.Context, req provider.Con
 		return
 	}
 
-	serverURL := config.ServerURL.ValueString()
-	authHeader := config.AuthHeader.ValueString()
-
-	providerData := ProviderData{
-		AuthHeader: authHeader,
-		ServerURL:  serverURL,
+	providerData := &ProviderData{
+		AuthHeader: config.AuthHeader.ValueString(),
+		ServerURL:  config.ServerURL.ValueString(),
 	}
 
 	resp.DataSourceData = providerData
