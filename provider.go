@@ -70,8 +70,8 @@ func (p *bitbucketTokenProvider) Configure(ctx context.Context, req provider.Con
 		ServerURL:  config.ServerURL.ValueString(),
 	}
 
-	resp.DataSourceData = providerData
-	resp.ResourceData = providerData
+	resp.DataSourceData = &providerData
+	resp.ResourceData = &providerData
 }
 
 func (p *bitbucketTokenProvider) DataSources(_ context.Context) []func() datasource.DataSource {
