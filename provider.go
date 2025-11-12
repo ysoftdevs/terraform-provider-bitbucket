@@ -17,8 +17,9 @@ func NewProvider() provider.Provider {
 type bitbucketTokenProvider struct{}
 
 type bitbucketTokenProviderModel struct {
-	AuthHeader types.String `tfsdk:"auth_header"`
-	ServerURL  types.String `tfsdk:"server_url"`
+	AuthHeader    types.String `tfsdk:"auth_header"`
+	ServerURL     types.String `tfsdk:"server_url"`
+	TLSSkipVerify types.Bool   `tfsdk:"tls_skip_verify"`
 }
 
 func (p *bitbucketTokenProvider) Metadata(_ context.Context, _ provider.MetadataRequest, resp *provider.MetadataResponse) {
@@ -37,6 +38,10 @@ func (p *bitbucketTokenProvider) Schema(_ context.Context, _ provider.SchemaRequ
 			"server_url": schema.StringAttribute{
 				Description: "Base URL of the Bitbucket server (e.g. https://stash.example.com). Must not end with a slash.",
 				Required:    true,
+			},
+			"tls_skip_verify": schema.BoolAttribute{
+				Description: "If true, disables TLS certificate verification. Use only for testing or internal servers.",
+				Optional:    true,
 			},
 		},
 	}
@@ -66,8 +71,9 @@ func (p *bitbucketTokenProvider) Configure(ctx context.Context, req provider.Con
 	}
 
 	providerData := &ProviderData{
-		AuthHeader: config.AuthHeader.ValueString(),
-		ServerURL:  config.ServerURL.ValueString(),
+		AuthHeader:    config.AuthHeader.ValueString(),
+		ServerURL:     config.ServerURL.ValueString(),
+		TLSSkipVerify: config.TLSSkipVerify.ValueBool(), // <-- passes TLS flag through
 	}
 
 	resp.DataSourceData = providerData

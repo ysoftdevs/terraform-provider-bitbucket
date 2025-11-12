@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -15,13 +16,15 @@ import (
 )
 
 type ProviderData struct {
-	AuthHeader string
-	ServerURL  string
+	AuthHeader    string
+	ServerURL     string
+	TLSSkipVerify bool
 }
 
 type BitbucketTokenResource struct {
-	authHeader string
-	serverURL  string
+	authHeader    string
+	serverURL     string
+	tlsSkipVerify bool
 }
 
 func NewBitbucketTokenResource() resource.Resource {
@@ -92,11 +95,23 @@ func (r *BitbucketTokenResource) Configure(ctx context.Context, req resource.Con
 
 	r.authHeader = providerData.AuthHeader
 	r.serverURL = providerData.ServerURL
+	r.tlsSkipVerify = providerData.TLSSkipVerify
+}
+
+func (r *BitbucketTokenResource) httpClient() *http.Client {
+	tr := &http.Transport{
+		TLSClientConfig: &tls.Config{InsecureSkipVerify: r.tlsSkipVerify},
+	}
+	return &http.Client{
+		Timeout:   15 * time.Second,
+		Transport: tr,
+	}
 }
 
 func (r *BitbucketTokenResource) getExistingToken(auth, baseURL, project, repo, name string) (string, error) {
 	apiURL := fmt.Sprintf("%s/rest/access-tokens/latest/projects/%s/repos/%s?limit=10000", baseURL, project, repo)
-	client := &http.Client{Timeout: 15 * time.Second}
+
+	client := r.httpClient()
 
 	reqGet, _ := http.NewRequest("GET", apiURL, nil)
 	reqGet.Header.Add("Authorization", "Basic "+auth)
@@ -145,7 +160,9 @@ func (r *BitbucketTokenResource) createToken(auth, baseURL, project, repo, name 
 	}
 
 	payloadBytes, _ := json.Marshal(payload)
-	client := &http.Client{Timeout: 15 * time.Second}
+
+	client := r.httpClient()
+
 	reqPut, _ := http.NewRequest("PUT", putURL, bytes.NewReader(payloadBytes))
 	reqPut.Header.Add("Authorization", "Basic "+auth)
 	reqPut.Header.Add("Content-Type", "application/json")
@@ -293,7 +310,7 @@ func (r *BitbucketTokenResource) Delete(ctx context.Context, req resource.Delete
 	name := data.TokenName.ValueString()
 	baseURL := r.serverURL
 
-	client := &http.Client{Timeout: 15 * time.Second}
+	client := r.httpClient()
 
 	tokenID, err := r.getExistingToken(auth, baseURL, project, repo, name)
 	if err != nil {
