@@ -196,18 +196,6 @@ func getTokenByName(tokens []tokenInfo, name string) *tokenInfo {
 	return nil
 }
 
-// getLatestByExpiry picks the token with the highest expiry.
-func getLatestByExpiry(tokens []tokenInfo) *tokenInfo {
-	var latest *tokenInfo
-	for i := range tokens {
-		if latest == nil || tokens[i].ExpiryMs > latest.ExpiryMs {
-			copy := tokens[i]
-			latest = &copy
-		}
-	}
-	return latest
-}
-
 // createToken creates a new access token and returns (secret, name, expiryMs).
 func (r *BitbucketTokenResource) createToken(auth, baseURL, project, repo, prefix string) (string, string, int64, error) {
 	putURL := fmt.Sprintf("%s/rest/access-tokens/latest/projects/%s/repos/%s", baseURL, project, repo)
@@ -284,33 +272,30 @@ func (r *BitbucketTokenResource) ensureToken(data *BitbucketTokenResourceModel) 
 	}
 
 	nowMs := time.Now().UnixMilli()
+	thresholdMs := int64(30 * 24 * time.Hour / time.Millisecond)
 
-	// If we already have a specific token tracked in state, check it first.
 	stateName := data.CurrentTokenName.ValueString()
 	stateSecret := data.Token.ValueString()
 
 	if stateName != "" && stateSecret != "" {
-		if t := getTokenByName(tokens, stateName); t != nil && t.ExpiryMs > nowMs {
-			// Still valid → reuse secret from state.
-			data.Token = types.StringValue(stateSecret)
-			data.CurrentTokenName = types.StringValue(t.Name)
-			data.CurrentTokenExpiry = types.Int64Value(t.ExpiryMs)
-			return data, nil
-		}
-		// If expired or missing → try to delete it (best effort).
-		if t := getTokenByName(tokens, stateName); t != nil && t.ExpiryMs <= nowMs {
+		if t := getTokenByName(tokens, stateName); t != nil {
+			timeLeft := t.ExpiryMs - nowMs
+			if timeLeft > thresholdMs {
+				data.Token = types.StringValue(stateSecret)
+				data.CurrentTokenName = types.StringValue(t.Name)
+				data.CurrentTokenExpiry = types.Int64Value(t.ExpiryMs)
+				return data, nil
+			}
 			_ = r.deleteToken(r.authHeader, r.serverURL, project, repo, stateName)
 		}
 	}
 
-	// Clean up all expired tokens with this prefix before creating a new one.
 	for _, t := range tokens {
 		if t.ExpiryMs <= nowMs {
 			_ = r.deleteToken(r.authHeader, r.serverURL, project, repo, t.Name)
 		}
 	}
 
-	// Create a new token and record its secret + metadata.
 	secret, newName, expiry, err := r.createToken(r.authHeader, r.serverURL, project, repo, prefix)
 	if err != nil {
 		return nil, err
