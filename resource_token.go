@@ -347,14 +347,18 @@ func (r *BitbucketTokenResource) Read(ctx context.Context, req resource.ReadRequ
 	}
 
 	nowMs := time.Now().UnixMilli()
+	thresholdMs := int64(30 * 24 * time.Hour / time.Millisecond)
+
 	stateName := data.CurrentTokenName.ValueString()
 	var valid bool
 
 	if stateName != "" {
-		if t := getTokenByName(tokens, stateName); t != nil && t.ExpiryMs > nowMs {
-			// keep state as-is
-			data.CurrentTokenExpiry = types.Int64Value(t.ExpiryMs)
-			valid = true
+		if t := getTokenByName(tokens, stateName); t != nil {
+			timeLeft := t.ExpiryMs - nowMs
+			if timeLeft > thresholdMs {
+				data.CurrentTokenExpiry = types.Int64Value(t.ExpiryMs)
+				valid = true
+			}
 		}
 	}
 
