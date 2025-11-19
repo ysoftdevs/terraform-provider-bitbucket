@@ -3,6 +3,7 @@ package test
 import (
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/hashicorp/terraform-plugin-framework/providerserver"
 	"github.com/hashicorp/terraform-plugin-go/tfprotov6"
@@ -14,48 +15,105 @@ import (
 	mock "terraform-provider-bitbucket-token/mock_server"
 )
 
-// Acceptance test provider factories for protocol v6
 var testAccProviderFactories = map[string]func() (tfprotov6.ProviderServer, error){
 	"bitbucket": providerserver.NewProtocol6WithError(provider.NewProvider()),
 }
 
-func TestAccBitbucketToken_CRUD(t *testing.T) {
-	server := mock.NewMockBitbucketServer()
-
-	if err := server.Start(); err != nil {
-		t.Fatalf("server start error: %v", err)
-	}
-
+func TestAccBitbucketToken_AllScenarios(t *testing.T) {
+	// Split into focused tests to validate specific behaviors.
 	resourceName := "bitbucket_token.test"
 
-	resource.Test(t, resource.TestCase{
-		PreCheck:                 func() { testAccPreCheck(t) },
-		ProtoV6ProviderFactories: testAccProviderFactories,
-		CheckDestroy:             testAccCheckBitbucketTokenDestroy(server),
-		Steps: []resource.TestStep{
-			{
-				// CREATE
-				Config: testAccBitbucketTokenConfig(server.URL),
-				Check: resource.ComposeTestCheckFunc(
-					resource.TestCheckResourceAttrSet(resourceName, "id"),
-					resource.TestCheckResourceAttrSet(resourceName, "current_token_name"),
-					resource.TestCheckResourceAttrSet(resourceName, "current_token_expiry"),
-					resource.TestCheckResourceAttrSet(resourceName, "token"),
-				),
+	// Helper to start a fresh server for each test.
+	startServer := func(t *testing.T) *mock.MockBitbucketServer {
+		srv := mock.NewMockBitbucketServer()
+		if err := srv.Start(); err != nil {
+			t.Fatalf("server start error: %v", err)
+		}
+		return srv
+	}
+
+	t.Run("CreateWhenNone", func(t *testing.T) {
+		server := startServer(t)
+		defer func() { _ = server }()
+
+		resource.Test(t, resource.TestCase{
+			PreCheck:                 func() { testAccPreCheck(t) },
+			ProtoV6ProviderFactories: testAccProviderFactories,
+			Steps: []resource.TestStep{
+				{
+					Config: testAccBitbucketTokenConfig(server.URL),
+					Check: resource.ComposeTestCheckFunc(
+						resource.TestCheckResourceAttrSet(resourceName, "id"),
+						resource.TestCheckResourceAttrSet(resourceName, "token"),
+						resource.TestCheckResourceAttrSet(resourceName, "current_token_name"),
+						resource.TestCheckResourceAttrSet(resourceName, "current_token_expiry"),
+						testAccCheckServerHasTokens(server, "proj/repo", 1),
+					),
+				},
 			},
-			{
-				// READ (no drift) – apply the same config again; plan should stay empty
-				Config: testAccBitbucketTokenConfig(server.URL),
+		})
+	})
+
+	t.Run("ReuseStateWhenSecondaryExists", func(t *testing.T) {
+		server := startServer(t)
+		defer func() { _ = server }()
+
+		resource.Test(t, resource.TestCase{
+			PreCheck:                 func() { testAccPreCheck(t) },
+			ProtoV6ProviderFactories: testAccProviderFactories,
+			Steps: []resource.TestStep{
+				// 1) create initial token and capture state
+				{
+					Config: testAccBitbucketTokenConfig(server.URL),
+				},
+				// 2) Add a secondary token on the server, expect no changes (reuse)
+				{
+					PreConfig: func() {
+						server.Mu.Lock()
+						server.Tokens["proj/repo"] = append(server.Tokens["proj/repo"], mock.Token{
+							Name:       "prefix-secondary",
+							Token:      "secret-secondary",
+							ExpiryDate: time.Now().Add(24 * time.Hour).UnixMilli(),
+						})
+						server.Mu.Unlock()
+					},
+					Config:   testAccBitbucketTokenConfig(server.URL),
+					PlanOnly: true,
+				},
 			},
-		},
+		})
+	})
+
+	t.Run("RecreateWhenExpired", func(t *testing.T) {
+		server := startServer(t)
+		defer func() { _ = server }()
+
+		resource.Test(t, resource.TestCase{
+			PreCheck:                 func() { testAccPreCheck(t) },
+			ProtoV6ProviderFactories: testAccProviderFactories,
+			CheckDestroy:             testAccCheckBitbucketTokenDestroy(server),
+			Steps: []resource.TestStep{
+				// 1) create initial token
+				{
+					Config: testAccBitbucketTokenConfig(server.URL),
+				},
+				// 2) expire token on server and refresh state; expect a non-empty plan
+				{
+					PreConfig: func() {
+						server.SetExpiredToken("proj/repo")
+					},
+					RefreshState:        true,
+					ExpectNonEmptyPlan:  true,
+				},
+			},
+		})
 	})
 }
 
 //
-// -------- Helper Functions --------
+// ---------- Helper Configs ----------
 //
 
-// Basic test configuration for the provider + resource
 func testAccBitbucketTokenConfig(url string) string {
 	return fmt.Sprintf(`
 provider "bitbucket" {
@@ -72,24 +130,56 @@ resource "bitbucket_token" "test" {
 `, url)
 }
 
-// Ensures Terraform acceptance test environment is correct
+func testAccBitbucketTokenConfigPrefix(url, prefix string) string {
+	return fmt.Sprintf(`
+provider "bitbucket" {
+  server_url      = "%s"
+  auth_header     = "dummy"
+  tls_skip_verify = true
+}
+
+resource "bitbucket_token" "test" {
+  project_name    = "proj"
+  repository_name = "repo"
+  token_name      = "%s"
+}
+`, url, prefix)
+}
+
+//
+// ---------- Environment ----------
+//
+
 func testAccPreCheck(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping acceptance tests in short mode")
 	}
 }
 
-// Verifies that all tokens were removed by Delete()
 func testAccCheckBitbucketTokenDestroy(server *mock.MockBitbucketServer) resource.TestCheckFunc {
 	return func(s *terraform.State) error {
 		server.Mu.Lock()
 		defer server.Mu.Unlock()
 
-		// server.Tokens should be empty after resource.Delete()
-		for _, tokens := range server.Tokens {
-			if len(tokens) != 0 {
-				return fmt.Errorf("expected no tokens, but found: %#v", server.Tokens)
+		for _, tok := range server.Tokens {
+			if len(tok) != 0 {
+				return fmt.Errorf("tokens still exist: %#v", server.Tokens)
 			}
+		}
+		return nil
+	}
+}
+
+// testAccCheckServerHasTokens asserts that the mock server contains exactly
+// `expected` tokens for the given repo key (e.g. "proj/repo").
+func testAccCheckServerHasTokens(server *mock.MockBitbucketServer, key string, expected int) resource.TestCheckFunc {
+	return func(s *terraform.State) error {
+		server.Mu.Lock()
+		defer server.Mu.Unlock()
+
+		toks := server.Tokens[key]
+		if len(toks) != expected {
+			return fmt.Errorf("expected %d tokens for %s, got %d: %#v", expected, key, len(toks), toks)
 		}
 		return nil
 	}

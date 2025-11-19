@@ -327,8 +327,6 @@ func (r *BitbucketTokenResource) Create(ctx context.Context, req resource.Create
 	resp.Diagnostics.Append(resp.State.Set(ctx, out)...)
 }
 
-// Read — does not create new tokens (to keep Read side-effect free).
-// If the tracked token is missing or expired, remove from state so the next Apply will recreate it.
 func (r *BitbucketTokenResource) Read(ctx context.Context, req resource.ReadRequest, resp *resource.ReadResponse) {
 	var data BitbucketTokenResourceModel
 	resp.Diagnostics.Append(req.State.Get(ctx, &data)...)
@@ -336,38 +334,62 @@ func (r *BitbucketTokenResource) Read(ctx context.Context, req resource.ReadRequ
 		return
 	}
 
+	// ----------------------------------------------------------
+	// FIX #1: unknown values must be treated as drift
+	// ----------------------------------------------------------
+	if data.CurrentTokenName.IsUnknown() || data.Token.IsUnknown() {
+		resp.State.RemoveResource(ctx)
+		return
+	}
+
+	// If no ID or no token name → resource is incomplete → drift
+	if data.ID.IsUnknown() || data.ID.IsNull() ||
+		data.CurrentTokenName.IsNull() {
+		resp.State.RemoveResource(ctx)
+		return
+	}
+
 	project := data.ProjectName.ValueString()
 	repo := data.RepositoryName.ValueString()
 	prefix := data.TokenName.ValueString()
 
+	// List tokens from Bitbucket
 	tokens, err := r.listTokens(r.authHeader, r.serverURL, project, repo, prefix)
 	if err != nil {
 		resp.Diagnostics.AddError("Error listing tokens", err.Error())
 		return
 	}
 
+	stateName := data.CurrentTokenName.ValueString()
 	nowMs := time.Now().UnixMilli()
 	thresholdMs := int64(30 * 24 * time.Hour / time.Millisecond)
 
-	stateName := data.CurrentTokenName.ValueString()
-	var valid bool
+	// Find token in server list
+	t := getTokenByName(tokens, stateName)
 
-	if stateName != "" {
-		if t := getTokenByName(tokens, stateName); t != nil {
-			timeLeft := t.ExpiryMs - nowMs
-			if timeLeft > thresholdMs {
-				data.CurrentTokenExpiry = types.Int64Value(t.ExpiryMs)
-				valid = true
-			}
-		}
-	}
-
-	if !valid {
-		// Not present or expired -> remove from state; next Apply will create a new one in Create/Update paths.
+	// ----------------------------------------------------------
+	// FIX #2: drift if token does not exist anymore
+	// ----------------------------------------------------------
+	if t == nil {
 		resp.State.RemoveResource(ctx)
 		return
 	}
 
+	// Time remaining before expiration
+	timeLeft := t.ExpiryMs - nowMs
+
+	// ----------------------------------------------------------
+	// FIX #3: expired or expiring soon → drift
+	// ----------------------------------------------------------
+	if timeLeft <= thresholdMs {
+		resp.State.RemoveResource(ctx)
+		return
+	}
+
+	// ----------------------------------------------------------
+	// All good → update expiry in state
+	// ----------------------------------------------------------
+	data.CurrentTokenExpiry = types.Int64Value(t.ExpiryMs)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
 }
 

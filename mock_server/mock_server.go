@@ -1,7 +1,10 @@
 package mock_server
 
 import (
+	"bytes"
 	"encoding/json"
+	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"strings"
@@ -34,6 +37,13 @@ func NewMockBitbucketServer() *MockBitbucketServer {
 	// ONE handler, dispatching by HTTP method (GET / PUT / DELETE)
 	// ---------------------------------------------------------------------
 	mux.HandleFunc("/rest/access-tokens/latest/projects/", func(w http.ResponseWriter, r *http.Request) {
+		// Debug log incoming requests to help troubleshoot test failures.
+		fmt.Printf("[mock] %s %s\n", r.Method, r.URL.Path)
+		if r.Method == http.MethodPut {
+			body, _ := io.ReadAll(r.Body)
+			fmt.Printf("[mock] body: %s\n", string(body))
+			r.Body = io.NopCloser(bytes.NewReader(body))
+		}
 		parts := strings.Split(r.URL.Path, "/")
 		// Expected for LIST and CREATE:
 		// ["","rest","access-tokens","latest","projects",p,"repos",r]
@@ -46,8 +56,9 @@ func NewMockBitbucketServer() *MockBitbucketServer {
 			return
 		}
 
-		project := parts[4]
-		repo := parts[6]
+		// parts layout: ["", "rest", "access-tokens", "latest", "projects", <project>, "repos", <repo>, ...]
+		project := parts[5]
+		repo := parts[7]
 		key := project + "/" + repo
 
 		switch r.Method {
@@ -149,4 +160,23 @@ func (m *MockBitbucketServer) ClearTokensFor(key string) {
 	m.Mu.Lock()
 	m.Tokens[key] = nil
 	m.Mu.Unlock()
+}
+
+func (m *MockBitbucketServer) SetExpiredToken(key string) {
+	m.Mu.Lock()
+	defer m.Mu.Unlock()
+
+	if len(m.Tokens[key]) == 0 {
+		// create one if none exists
+		m.Tokens[key] = []Token{{
+			Name:        "expired-token",
+			Token:       "secret",
+			ExpiryDate:  time.Now().Add(-1 * time.Hour).UnixMilli(),
+			Permissions: []string{"REPO_READ"},
+		}}
+		return
+	}
+
+	// expire the first existing token
+	m.Tokens[key][0].ExpiryDate = time.Now().Add(-1 * time.Hour).UnixMilli()
 }
