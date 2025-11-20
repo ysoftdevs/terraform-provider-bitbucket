@@ -53,18 +53,19 @@ To build the provider binary:
 go build -o terraform-provider-bitbucket-token main.go
 ```
 
-
 ### Release & OpenTofu Registry
 
 Releases are managed via `goreleaser.yml` and published automatically to the OpenTofu registry.
 
 **How it works:**
+
 - Each time a new version tag (e.g., `v1.2.3`) is pushed to the repository, a release is built and published.
 - The provider is automatically registered with the OpenTofu registry at `registry.opentofu.org/ysoftdevs/bitbucket`.
 - After publishing, the registry will automatically promote the new version within a few hours (usually up to 2 hours).
 - No manual steps are required for registry promotion—users will see the new version available for installation after the delay.
 
 **User workflow:**
+
 1. Wait for the new tag to be promoted (check registry for latest version).
 2. Reference the desired version in your Terraform/OpenTofu configuration:
    ```hcl
@@ -77,7 +78,7 @@ Releases are managed via `goreleaser.yml` and published automatically to the Ope
      }
    }
    ```
-3. Run `tofu init` or `terraform init` to install the provider.
+3. Run `tofu init` to install the provider.
 
 See [GoReleaser](https://goreleaser.com/) for build details and `terraform-registry-manifest.json` for protocol info.
 
