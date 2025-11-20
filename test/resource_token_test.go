@@ -102,8 +102,8 @@ func TestAccBitbucketToken_AllScenarios(t *testing.T) {
 					PreConfig: func() {
 						server.SetExpiredToken("proj/repo")
 					},
-					RefreshState:        true,
-					ExpectNonEmptyPlan:  true,
+					RefreshState:       true,
+					ExpectNonEmptyPlan: true,
 				},
 			},
 		})
@@ -128,22 +128,6 @@ resource "bitbucket_token" "test" {
   token_name      = "prefix"
 }
 `, url)
-}
-
-func testAccBitbucketTokenConfigPrefix(url, prefix string) string {
-	return fmt.Sprintf(`
-provider "bitbucket" {
-  server_url      = "%s"
-  auth_header     = "dummy"
-  tls_skip_verify = true
-}
-
-resource "bitbucket_token" "test" {
-  project_name    = "proj"
-  repository_name = "repo"
-  token_name      = "%s"
-}
-`, url, prefix)
 }
 
 //

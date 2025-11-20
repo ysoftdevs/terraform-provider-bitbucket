@@ -73,7 +73,7 @@ func (p *bitbucketTokenProvider) Configure(ctx context.Context, req provider.Con
 	providerData := &ProviderData{
 		AuthHeader:    config.AuthHeader.ValueString(),
 		ServerURL:     config.ServerURL.ValueString(),
-		TLSSkipVerify: config.TLSSkipVerify.ValueBool(), // <-- passes TLS flag through
+		TLSSkipVerify: config.TLSSkipVerify.ValueBool(),
 	}
 
 	resp.DataSourceData = providerData

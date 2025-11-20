@@ -15,14 +15,12 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/types"
 )
 
-// ProviderData contains configuration passed from the provider to the resource.
 type ProviderData struct {
 	AuthHeader    string
 	ServerURL     string
 	TLSSkipVerify bool
 }
 
-// BitbucketTokenResource manages Bitbucket repository access tokens.
 type BitbucketTokenResource struct {
 	authHeader    string
 	serverURL     string
@@ -33,23 +31,20 @@ func NewBitbucketTokenResource() resource.Resource {
 	return &BitbucketTokenResource{}
 }
 
-// BitbucketTokenResourceModel maps Terraform schema attributes to Go fields.
 type BitbucketTokenResourceModel struct {
 	ID                 types.String `tfsdk:"id"`
-	TokenName          types.String `tfsdk:"token_name"` // prefix provided by user
+	TokenName          types.String `tfsdk:"token_name"`
 	ProjectName        types.String `tfsdk:"project_name"`
 	RepositoryName     types.String `tfsdk:"repository_name"`
-	Token              types.String `tfsdk:"token"`                // secret; returned only on creation; preserved from state
-	CurrentTokenName   types.String `tfsdk:"current_token_name"`   // actual token identifier (prefix-epoch)
-	CurrentTokenExpiry types.Int64  `tfsdk:"current_token_expiry"` // ms since epoch
+	Token              types.String `tfsdk:"token"`
+	CurrentTokenName   types.String `tfsdk:"current_token_name"`
+	CurrentTokenExpiry types.Int64  `tfsdk:"current_token_expiry"`
 }
 
-// Metadata defines the Terraform resource type name.
 func (r *BitbucketTokenResource) Metadata(_ context.Context, _ resource.MetadataRequest, resp *resource.MetadataResponse) {
 	resp.TypeName = "bitbucket_token"
 }
 
-// Schema defines the Terraform resource schema.
 func (r *BitbucketTokenResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
 	resp.Schema = schema.Schema{
 		Description: "Manages Bitbucket access tokens for a repository. The token secret is only returned when created and is preserved in state for reuse while valid.",
@@ -86,7 +81,6 @@ func (r *BitbucketTokenResource) Schema(_ context.Context, _ resource.SchemaRequ
 	}
 }
 
-// Configure sets up provider-level data for the resource.
 func (r *BitbucketTokenResource) Configure(_ context.Context, req resource.ConfigureRequest, resp *resource.ConfigureResponse) {
 	if req.ProviderData == nil {
 		return
@@ -114,10 +108,9 @@ func (r *BitbucketTokenResource) Configure(_ context.Context, req resource.Confi
 	r.tlsSkipVerify = providerData.TLSSkipVerify
 }
 
-// httpClient creates a custom HTTP client with optional TLS skip verification.
 func (r *BitbucketTokenResource) httpClient() *http.Client {
 	tr := &http.Transport{
-		TLSClientConfig: &tls.Config{InsecureSkipVerify: r.tlsSkipVerify}, // #nosec G402 - intentional per user config
+		TLSClientConfig: &tls.Config{InsecureSkipVerify: r.tlsSkipVerify},
 	}
 	return &http.Client{
 		Timeout:   20 * time.Second,
@@ -125,14 +118,12 @@ func (r *BitbucketTokenResource) httpClient() *http.Client {
 	}
 }
 
-// tokenInfo describes an access token returned by listing API.
 type tokenInfo struct {
 	Name        string
 	ExpiryMs    int64
 	Permissions []string
 }
 
-// listTokens lists all tokens for a repo and filters by prefix; returns all matches.
 func (r *BitbucketTokenResource) listTokens(auth, baseURL, project, repo, prefix string) ([]tokenInfo, error) {
 	apiURL := fmt.Sprintf("%s/rest/access-tokens/latest/projects/%s/repos/%s?limit=10000", baseURL, project, repo)
 	client := r.httpClient()
@@ -166,7 +157,7 @@ func (r *BitbucketTokenResource) listTokens(auth, baseURL, project, repo, prefix
 		if len(name) < len(prefix) || name[:len(prefix)] != prefix {
 			continue
 		}
-		exp, _ := obj["expiryDate"].(float64) // ms since epoch
+		exp, _ := obj["expiryDate"].(float64)
 		expMs := int64(exp)
 
 		var perms []string
@@ -186,7 +177,6 @@ func (r *BitbucketTokenResource) listTokens(auth, baseURL, project, repo, prefix
 	return out, nil
 }
 
-// getTokenByName searches list results for an exact name.
 func getTokenByName(tokens []tokenInfo, name string) *tokenInfo {
 	for i := range tokens {
 		if tokens[i].Name == name {
@@ -196,7 +186,6 @@ func getTokenByName(tokens []tokenInfo, name string) *tokenInfo {
 	return nil
 }
 
-// createToken creates a new access token and returns (secret, name, expiryMs).
 func (r *BitbucketTokenResource) createToken(auth, baseURL, project, repo, prefix string) (string, string, int64, error) {
 	putURL := fmt.Sprintf("%s/rest/access-tokens/latest/projects/%s/repos/%s", baseURL, project, repo)
 	payload := map[string]interface{}{
@@ -238,7 +227,6 @@ func (r *BitbucketTokenResource) createToken(auth, baseURL, project, repo, prefi
 	return secret, name, expMs, nil
 }
 
-// deleteToken removes a token by name.
 func (r *BitbucketTokenResource) deleteToken(auth, baseURL, project, repo, name string) error {
 	client := r.httpClient()
 	delURL := fmt.Sprintf("%s/rest/access-tokens/latest/projects/%s/repos/%s/%s", baseURL, project, repo, name)
@@ -258,9 +246,6 @@ func (r *BitbucketTokenResource) deleteToken(auth, baseURL, project, repo, name 
 	return nil
 }
 
-// ensureToken ensures we end with a valid token secret in state.
-// If state has a valid token → keep its secret.
-// If missing/expired → delete expired (if any) and create a fresh one.
 func (r *BitbucketTokenResource) ensureToken(data *BitbucketTokenResourceModel) (*BitbucketTokenResourceModel, error) {
 	project := data.ProjectName.ValueString()
 	repo := data.RepositoryName.ValueString()
@@ -308,8 +293,6 @@ func (r *BitbucketTokenResource) ensureToken(data *BitbucketTokenResourceModel) 
 	return data, nil
 }
 
-// Create — always produces a token value. Since no prior state exists,
-// we create a fresh token (after cleaning up any expired ones for the prefix).
 func (r *BitbucketTokenResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
 	var data BitbucketTokenResourceModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &data)...)
@@ -334,15 +317,11 @@ func (r *BitbucketTokenResource) Read(ctx context.Context, req resource.ReadRequ
 		return
 	}
 
-	// ----------------------------------------------------------
-	// FIX #1: unknown values must be treated as drift
-	// ----------------------------------------------------------
 	if data.CurrentTokenName.IsUnknown() || data.Token.IsUnknown() {
 		resp.State.RemoveResource(ctx)
 		return
 	}
 
-	// If no ID or no token name → resource is incomplete → drift
 	if data.ID.IsUnknown() || data.ID.IsNull() ||
 		data.CurrentTokenName.IsNull() {
 		resp.State.RemoveResource(ctx)
@@ -353,7 +332,6 @@ func (r *BitbucketTokenResource) Read(ctx context.Context, req resource.ReadRequ
 	repo := data.RepositoryName.ValueString()
 	prefix := data.TokenName.ValueString()
 
-	// List tokens from Bitbucket
 	tokens, err := r.listTokens(r.authHeader, r.serverURL, project, repo, prefix)
 	if err != nil {
 		resp.Diagnostics.AddError("Error listing tokens", err.Error())
@@ -364,37 +342,24 @@ func (r *BitbucketTokenResource) Read(ctx context.Context, req resource.ReadRequ
 	nowMs := time.Now().UnixMilli()
 	thresholdMs := int64(30 * 24 * time.Hour / time.Millisecond)
 
-	// Find token in server list
 	t := getTokenByName(tokens, stateName)
 
-	// ----------------------------------------------------------
-	// FIX #2: drift if token does not exist anymore
-	// ----------------------------------------------------------
 	if t == nil {
 		resp.State.RemoveResource(ctx)
 		return
 	}
 
-	// Time remaining before expiration
 	timeLeft := t.ExpiryMs - nowMs
 
-	// ----------------------------------------------------------
-	// FIX #3: expired or expiring soon → drift
-	// ----------------------------------------------------------
 	if timeLeft <= thresholdMs {
 		resp.State.RemoveResource(ctx)
 		return
 	}
 
-	// ----------------------------------------------------------
-	// All good → update expiry in state
-	// ----------------------------------------------------------
 	data.CurrentTokenExpiry = types.Int64Value(t.ExpiryMs)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
 }
 
-// Update — same semantics as Create: ensure we output a valid token value.
-// If state has a valid token, reuse its secret; otherwise delete expired and create new.
 func (r *BitbucketTokenResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
 	var plan BitbucketTokenResourceModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
@@ -402,11 +367,9 @@ func (r *BitbucketTokenResource) Update(ctx context.Context, req resource.Update
 		return
 	}
 
-	// Carry over prior state (for secret) if present.
 	var state BitbucketTokenResourceModel
 	_ = req.State.Get(ctx, &state)
 
-	// Start from plan but keep any state-held secret/name/expiry for reuse.
 	if !state.Token.IsNull() && !state.Token.IsUnknown() {
 		plan.Token = state.Token
 	}
@@ -427,7 +390,6 @@ func (r *BitbucketTokenResource) Update(ctx context.Context, req resource.Update
 	resp.Diagnostics.Append(resp.State.Set(ctx, out)...)
 }
 
-// Delete removes the tracked token if it still exists.
 func (r *BitbucketTokenResource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
 	var data BitbucketTokenResourceModel
 	resp.Diagnostics.Append(req.State.Get(ctx, &data)...)
